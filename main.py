@@ -1,4 +1,5 @@
 import os
+import argparse
 
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
@@ -6,9 +7,14 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 from quantization.int8_quantizer import Int8Quantizer
 
 if __name__ == '__main__':
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='LLM Post-Training Quantization')
+    parser.add_argument('--model_name', type=str, help='Name of the model to quantize')
+    
+    args = parser.parse_args()
+    model_name = args.model_name
 
     cache_dir = "./output/cache"
-    model_name = "meta-llama/Llama-3.1-8B-Instruct"
 
     # Create cache directory if it doesn't exist
     os.makedirs(cache_dir, exist_ok=True)
@@ -33,6 +39,7 @@ if __name__ == '__main__':
 
     print("Loading model from cache..." if model_exists_in_cache else "Model not found in cache. Downloading model...")
 
+    # Use device_map="auto" if having CUDA enabled and enough VRAM
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
         torch_dtype=torch.float16,
