@@ -4,6 +4,7 @@ from typing import Optional, Dict
 import numpy as np
 import torch
 import torch.nn as nn
+import copy
 
 
 class QuantizationMode(Enum):
@@ -20,12 +21,17 @@ class CustomInt8Linear(nn.Module):
         self.out_features = out_features
         self.bias = bias
         self.quantization_mode = quantization_mode
-        self.symmetric_qmin, self.symmetric_qmax = -2 ** (8 - 1), 2 ** (8 - 1) - 1  # -128, 127
+        self.symmetric_qmin, self.symmetric_qmax = -2 ** (8 - 1) + 1, 2 ** (8 - 1) - 1  # -127, 127
         self.asymmetric_qmin, self.asymmetric_qmax = 0, (2 ** 8) - 1  # 0, 255
 
         self.register_buffer('qweight', torch.zeros(
             (out_features, in_features), dtype=torch.int8
         ))
+
+        if bias:
+            self.bias_param = nn.Parameter(torch.zeros(out_features))  # initialize
+        else:
+            self.register_parameter('bias_param', None)
 
     def quantize_weights(self, weight: torch.Tensor):
         """Quantization using the determined mode (symmetric or asymmetric)."""
@@ -56,13 +62,15 @@ class CustomInt8Linear(nn.Module):
 
     def _quantize_symmetric(self, real_value: torch.Tensor):
         """Symmetric quantization for weights with signed INT8."""
-        real_max = torch.max(torch.abs(real_value))
-        real_min = torch.min(torch.abs(real_value))
+        max_abs = real_value.abs().max()
 
-        scale = (real_max - real_min) / (self.symmetric_qmax - self.symmetric_qmin)
+        # Compute scale based on symmetric range
+        scale = max_abs / self.symmetric_qmax
 
+        # Quantize: divide by scale and clamp to quantization range
         q = torch.round(real_value / scale).clamp(self.symmetric_qmin, self.symmetric_qmax).to(torch.int8)
 
+        # Save quantized weights and scale
         self.register_buffer('qweight', q)
         self.weight_scale = scale
 
@@ -70,31 +78,48 @@ class CustomInt8Linear(nn.Module):
 
     def _quantize_asymmetric(self, real_value: torch.Tensor):
         """Asymmetric quantization for activations."""
-        real_max = torch.max(torch.abs(real_value))
-        real_min = torch.min(torch.abs(real_value))
+        real_min = real_value.min()
+        real_max = real_value.max()
 
         scale = (real_max - real_min) / (self.asymmetric_qmax - self.asymmetric_qmin)
-        zero_point = self.asymmetric_qmin - torch.round(real_min / scale)
 
-        # Clamp zero point to valid range
-        zero_point = torch.clamp(zero_point, self.asymmetric_qmin, self.asymmetric_qmax)
+        zero_point = ((self.asymmetric_qmin - torch.round(real_min / scale))
+                      .clamp(self.asymmetric_qmin, self.asymmetric_qmax))
 
-        q = (torch.round(real_value / scale) + zero_point).clamp(
+        q = torch.round(real_value / scale + zero_point).clamp(
             self.asymmetric_qmin, self.asymmetric_qmax
         ).to(torch.uint8)
 
-        self.register_buffer('qweight', q)
-
+        self.register_buffer('qactivation', q)
         self.activation_scale = scale
         self.activation_zero_point = zero_point
 
         return q
 
+    @torch.no_grad()
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        if self.quantization_mode == QuantizationMode.SYMMETRIC:
+            # Symmetric quantization uses qweight in int8
+            qweight_fp32 = self.qweight.float()
+            weight = qweight_fp32 * self.weight_scale
+        else:
+            # Asymmetric quantization uses qweight in uint8 and includes zero_point
+            qweight_fp32 = self.qweight.float() - self.activation_zero_point
+            weight = qweight_fp32 * self.activation_scale
+
+        output = torch.matmul(input, weight.t())  # input: [batch, in_features], weight: [out, in]
+
+        # kept bias in float32
+        if self.bias:
+            output += self.bias_param
+
+
+        return output
+
 
 class Int8Quantizer:
     def __init__(self, model: nn.Module, tokenizer):
         self.quantized_model = None
-        self.tokenizer = None
         self.layer_distribution = {}  # Store data distribution for each layer
 
         self.model = model
@@ -137,8 +162,11 @@ class Int8Quantizer:
         if calibration_data is not None:
             self._run_calibration(calibration_data)
 
+        # Create a deep copy of the model to avoid modifying the original
+        self.quantized_model = copy.deepcopy(self.model)
+        
         # Replace full-precision linear layers with INT8 layers
-        self.quantized_model = self._replace_linear_layers(self.model)
+        self.quantized_model = self._replace_linear_layers(self.quantized_model)
 
         return self.quantized_model
 
@@ -210,20 +238,23 @@ class Int8Quantizer:
                 if child.weight is not None:
                     custom_layer.quantize_weights(child.weight.data)
 
+                if child.bias is not None:
+                    custom_layer.bias_param.data = child.bias.data.clone()
+
                 replacements.append((name, custom_layer))
 
-        # Replace all modules with quantization
+        # Replace all layers with quantization
         for name, custom_layer in replacements:
             # Find the parent module and attribute name
             parent_name = '.'.join(name.split('.')[:-1])
             attr_name = name.split('.')[-1]
-            
+
             if parent_name:
                 # Get the parent module
-                parent = module
+                current_parent = module
                 for part in parent_name.split('.'):
-                    parent = getattr(parent, part)
-                setattr(parent, attr_name, custom_layer)
+                    current_parent = getattr(current_parent, part)
+                setattr(current_parent, attr_name, custom_layer)
             else:
                 # Root level module
                 setattr(module, attr_name, custom_layer)

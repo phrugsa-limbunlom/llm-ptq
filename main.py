@@ -10,7 +10,7 @@ from quantization.bnb_int8_quantizer import BitsAndBytesInt8Quantizer
 from quantization.int8_quantizer import Int8Quantizer
 
 
-def get_model_size_info(model: nn.Module, quantized_model : nn.Module) -> Dict[str, float]:
+def get_model_size_info(model: nn.Module, quantized_model: nn.Module) -> Dict[str, float]:
     """Get information about model size before and after quantization."""
 
     # Calculate model sizes
@@ -36,6 +36,15 @@ def get_model_size_info(model: nn.Module, quantized_model : nn.Module) -> Dict[s
         "compression_ratio": compression_ratio,
         "memory_saved_gb": (original_size - quantized_size) / (1024 * 1024 * 1024),
     }
+
+def save_quantized_model(quantized_model: nn.Module, tokenizer, output_path: str):
+    """Save the quantized model."""
+
+    print(f"Saving quantized model to {output_path}...")
+    quantized_model.save_pretrained(output_path)
+    tokenizer.save_pretrained(output_path)
+    print("Quantized model saved successfully!")
+
 
 if __name__ == '__main__':
     # Parse command line arguments
@@ -97,13 +106,12 @@ if __name__ == '__main__':
         quantized_model = int8Quant.quantize_model(calibration_data)
 
         print("Quantization completed successfully!")
-        print(f"Quantized model saved with calibration-based quantization mode selection")
 
     else:
         print("\n8-bit Quantization with BitsAndBytes...")
 
         # Initialize the bitsandbytes quantizer
-        bnb_quantizer = BitsAndBytesInt8Quantizer(model, tokenizer)
+        bnb_quantizer = BitsAndBytesInt8Quantizer(model)
 
         # Quantize the model using bitsandbytes
         quantized_model = bnb_quantizer.quantize_model(
@@ -111,11 +119,11 @@ if __name__ == '__main__':
             llm_int8_has_fp16_weight=False
         )
 
-        # Save the quantized model
-        bnb_quantizer.save_quantized_model(output_dir)
-
     # Get model size information
     size_info = get_model_size_info(model=model, quantized_model=quantized_model)
     print("\n=== Model Size Information ===")
     for key, value in size_info.items():
         print(f"{key}: {value:.2f}")
+
+    # Save the quantized model (if having enough space)
+    # save_quantized_model(quantized_model, tokenizer, output_dir)
