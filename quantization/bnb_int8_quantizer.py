@@ -11,9 +11,8 @@ class BitsAndBytesInt8Quantizer:
     Supports both 8-bit linear layers and 8-bit optimizers.
     """
     
-    def __init__(self, model: nn.Module, tokenizer):
+    def __init__(self, model: nn.Module):
         self.model = model
-        self.tokenizer = tokenizer
         self.quantized_model = None
 
     def quantize_model(self, load_in_8bit: bool = True,
@@ -51,11 +50,3 @@ class BitsAndBytesInt8Quantizer:
 
         print("8-bit quantization completed successfully!")
         return self.quantized_model
-
-    def save_quantized_model(self, output_path: str):
-        """Save the quantized model."""
-
-        print(f"Saving quantized model to {output_path}...")
-        self.quantized_model.save_pretrained(output_path)
-        self.tokenizer.save_pretrained(output_path)
-        print("Quantized model saved successfully!") 
