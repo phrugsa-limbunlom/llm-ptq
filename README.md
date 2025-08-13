@@ -4,6 +4,8 @@ INT8 post-training quantization for Large Language Models with two quantization 
 1. **Custom INT8 Quantization**: Calibration-based quantization mode selection
 2. **BitsAndBytes INT8 Quantization**: Using the bitsandbytes library
 
+📚 This repository is a part of the article: [Choosing the right model size to your memory: Understanding bits & bytes and Model Quantization](https://medium.com/ai-advances/choosing-the-right-model-size-to-your-memory-understanding-bits-bytes-and-model-quantization-6045f8fc68c3)
+
 ## Features
 
 ### Custom INT8 Quantization
